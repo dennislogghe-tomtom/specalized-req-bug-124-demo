@@ -1,0 +1,6 @@
+{
+  "development_branch": "develop",
+  "mainline_branch": "master",
+  "merge": {"require_approval": false, "admin": true, "integration_strategy": "merge"},
+  "integrate": {"test_command": "true"}
+}

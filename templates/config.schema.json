@@ -1,0 +1,848 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Specalized Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference; set automatically by specalized deploy"
+    },
+    "version": {
+      "type": "string",
+      "default": "",
+      "readOnly": true,
+      "description": "Specalized version string; set automatically by specalized deploy — do not edit manually"
+    },
+    "editor": {
+      "type": "string",
+      "enum": ["vscode", "studio", ""],
+      "default": "",
+      "scope": "user",
+      "description": "IDE CLI to invoke when editor-related actions are triggered; set in user-config.json per developer"
+    },
+    "default_assistant": {
+      "type": "string",
+      "enum": [
+        "claude",
+        "copilot"
+      ],
+      "default": "claude",
+      "scope": "shared",
+      "description": "Primary AI assistant used for workflow execution"
+    },
+    "platform_files": {
+      "type": "string",
+      "enum": [
+        "local",
+        "shared"
+      ],
+      "default": "local",
+      "scope": "project",
+      "description": "Non-invasive-vs-shared switch for specalized-managed platform files. 'local' (default) is non-invasive: the specalized-managed guidance block is injected into the gitignored, personal CLAUDE.local.md at the repo root, so a deployment never creates or modifies the team's shared CLAUDE.md. 'shared' writes the managed block to the committed CLAUDE.md instead. In both modes the block is delimited by explicit sentinel markers and coexists with arbitrary user content in the same file. This is the single canonical control (it supersedes the earlier 'claude_md_target' naming): today it selects the CLAUDE managed-block injection target, and going forward it will also govern framework platform-file committability (delivered by REQ-DEPLOY-030/046)."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Model gradation resolution settings. Workflows declare a preferred gradation (low|medium|strong) in their JSON config; build/deploy caps it by 'max' and maps it to a concrete model for the active assistant using 'mapping'.",
+      "properties": {
+        "max": {
+          "type": "string",
+          "enum": ["low", "medium", "strong"],
+          "scope": "user",
+          "description": "User cap on the resolved model gradation. The effective gradation is the LOWER of a workflow's preferred gradation and this cap (min-semantics on low<medium<strong): capping only lowers, never raises. A workflow preferring 'strong' resolves to 'medium' when max is 'medium'; a workflow preferring 'low' stays 'low' regardless. Set in user-config.json per developer. Absent means no cap — each workflow's preferred gradation is used as-is."
+        },
+        "mapping": {
+          "type": "object",
+          "additionalProperties": true,
+          "scope": "shared",
+          "description": "Per-assistant gradation-to-concrete-model overrides, merged over the built-in defaults (Claude Code: low=haiku/medium=sonnet/strong=opus; GitHub Copilot: its own customizable mapping). Shape: { \"claude\": {\"low\": \"haiku\", ...}, \"copilot\": {\"low\": \"...\", ...} }. Only the levels you override need to be present; unspecified levels fall back to the built-in default for that assistant."
+        }
+      }
+    },
+    "run_deploy_on_start": {
+      "type": "boolean",
+      "default": true,
+      "scope": "project",
+      "description": "When true, VS Code runs the Specalized Deploy task on folder open to keep the deployment current"
+    },
+    "mainline_branch": {
+      "type": "string",
+      "default": "master",
+      "scope": "project",
+      "description": "Protected integration branch; used by git commit and PR workflows as the target branch"
+    },
+    "development_branch": {
+      "type": "string",
+      "default": "",
+      "scope": "project",
+      "description": "Optional standing integration branch the lifecycle targets instead of mainline_branch. When empty (default), breakdown/orchestrator/finalize behave as today: delivery targets mainline_branch and a version is cut per item. When set, the base-branch resolver returns this branch (unless an explicit --base overrides it), so work lands on the development branch for batched verification and versioning is deferred to a later mainline promotion."
+    },
+    "integration_base_drift_threshold": {
+      "type": "integer",
+      "default": 50,
+      "minimum": 0,
+      "scope": "project",
+      "description": "Maximum number of commits a milestone integration branch may lag behind mainline before provisioning fails loud instead of reconciling. At provision/breakdown time a non-mainline milestone integration branch is reconciled onto mainline (fast-forward or rebase) so a requirement never silently builds on a base drifted behind mainline; when the commits-behind-mainline count exceeds this threshold, or reconciliation cannot complete cleanly, provisioning raises rather than proceeding. A value of 0 disables the threshold ceiling (reconcile is still attempted; only an unclean reconcile fails loud)."
+    },
+    "integration": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "description": "Integration-branch discipline policy. Governs the hard guard that keeps every integration branch's history composed of uniform squashed units.",
+      "properties": {
+        "block_direct_commits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true (default) or absent, the protect-branch PreToolUse hook denies direct history-mutating git operations (commit, merge, rebase, cherry-pick, revert, reset --hard, and pushes targeting the branch) on any integration branch — the persistent development_branch and every milestone-declared ephemeral integration branch. Rework must instead be authored on a dedicated branch created off the integration branch and landed back via `specalized merge` as a single squashed commit (the CLI's own git operations are subprocesses, never agent tool calls, so the sanctioned landing is never blocked). When false, the guard is disabled and direct commits to integration branches are permitted (escape hatch for e.g. an emergency hotfix)."
+        },
+        "bypass": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When false (default) or absent, base routing is unchanged: milestone-assigned requirements branch from and merge back to their milestone integration branch, and automaton scope-drains use their batched-isolation integration branch (REQ-ARCH-423). When true, the whole lifecycle resolves every requirement's base and merge target to the standing integration base (development_branch > mainline_branch > master), ignoring any milestone integration-branch assignment — so each requirement is implemented, merged directly to the standing base, and the next branches off the updated base (the continuous backlog-drain). An explicit `--base <branch>` still wins over bypass. Bypass never creates, modifies, or retires an integration branch and preserves the requirement's milestone frontmatter as reporting metadata — only the branch routing is bypassed. This key is the explicit override of the default batched-isolation behavior (REQ-ARCH-423)."
+        },
+        "protect_integration_branches": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When false (default) or absent, specalized makes no GitHub branch-protection API call anywhere: declaring the persistent development_branch (config set development_branch / the setup wizard) and lazy-creating a milestone/category integration branch (e.g. during provision-worktree) both stay pure local operations. When true, specalized applies GitHub branch protection (allow_deletions disabled, the same protection `specalized integration protect` applies) to every integration branch it manages — the standing development_branch at declare-time and each milestone/category integration branch when it first creates or pushes it — so GitHub's repo-level delete_branch_on_merge never auto-deletes a merged integration-branch head. Under this mode, deleting an integration branch becomes exclusively the explicit `specalized integration retire` step, which removes protection before deleting. Because setting GitHub branch protection requires repo-admin, this is opt-in: when protection cannot be applied at create/declare time (non-admin, gh unauthenticated, or no GitHub remote), specalized warns and continues (the local operation still succeeds), relying on the admin-free recreate-and-push fallback in `integration integrate`/`update`. The mainline branch is out of scope — it is the default branch (already exempt from auto-delete) and carries org-governed protection specalized must not clobber."
+        }
+      }
+    },
+    "layout": {
+      "type": "string",
+      "enum": ["nested", "bare-container"],
+      "default": "nested",
+      "scope": "project",
+      "description": "Filesystem layout for this project. 'nested' (default): project root is the main working tree with feature worktrees under <ROOT>/.worktrees/<TAG>/. 'bare-container': project root is a container holding a bare repo (repo.git/), an optional main/ worktree, and sibling feature worktrees at <container>/<TAG>/. Never auto-detected — always explicit. Use 'specalized layout switch <target>' to migrate in place."
+    },
+    "mainline_commit_guard_fallback": {
+      "type": "string",
+      "enum": [
+        "create_branch",
+        "detach",
+        ""
+      ],
+      "default": "",
+      "scope": "user",
+      "description": "Behaviour when the mainline guard fires during a commit: 'create_branch' derives a new branch name and checks it out, 'detach' detaches HEAD, empty asks the user interactively"
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Requirement file management settings",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "default": "requirements",
+          "scope": "shared",
+          "description": "Branch that holds shared requirements files synced automatically during requirement operations. Defaults to \"requirements\" (auto-created on first sync); set to an empty string to disable syncing. Overridable per machine in user-config.json (--scope user) to avoid concurrent-push collisions when the same repo is worked from multiple machines -- but a per-machine override forks requirements state: requirements authored on one machine's branch are not visible on another machine's branch until reconciled via mainline or a manual merge. This trades the single-shared-branch guarantee for conflict avoidance and must be a deliberate choice, not a default recommendation."
+        },
+        "persistent_branch": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true, the requirements branch and its worktree are preserved across PR merges: DoR rebases the local branch to origin/master without recreating it. When false, the prior teardown behavior applies: the worktree is removed and the branch is recreated from origin/master after each merge."
+        },
+        "auto_merge": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, specalized.requirements mode=merge proceeds with gh pr merge --squash without prompting the user. Treat as project-wide pre-approval; set false to require an explicit confirmation before each merge."
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["feature", "bug", "doc", "chore"],
+          "scope": "project",
+          "description": "Configured requirement category folders under requirements/. Used by the requirements workflow to guide category selection. The list is injected at build time via ${requirements.categories} substitution."
+        },
+        "category_style": {
+          "type": "string",
+          "enum": ["default", "custom"],
+          "default": "default",
+          "scope": "project",
+          "description": "Controls whether the configured categories list is enforced ('default' — only configured categories allowed) or suggestive ('custom' — agent may create new categories when none fit). New and existing projects both default to 'default'."
+        }
+      }
+    },
+    "breakdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "Breakdown workflow settings",
+      "properties": {
+        "track_wip": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true, .specalized/wip/ is tracked in git; set to false to keep WIP artifacts local-only"
+        },
+        "create_worktree": {
+          "type": "boolean",
+          "default": false,
+          "scope": "shared",
+          "description": "When true, the breakdown workflow uses worktree mode for all single-requirement invocations without requiring an explicit phrase; set in user-config.json per developer"
+        },
+        "open_in_editor": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When true, the breakdown workflow auto-opens the created worktree in the IDE specified by the top-level `editor` key; set in user-config.json per developer"
+        },
+        "clarify": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true, interactive breakdown runs a structured clarification (grilling) pass after codebase exploration and before finalizing the spec: the agent asks one question at a time, each with a recommended answer and rationale, never asking what is discoverable, until the spec can be written without invented content. Set to false to opt out. Headless and orchestrator-dispatched runs skip the pass regardless of this value."
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "user",
+      "description": "Review workflow settings",
+      "properties": {
+        "ai_confidence_level": {
+          "type": "string",
+          "enum": [
+            "zero",
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "zero",
+          "scope": "user",
+          "description": "Autonomy threshold for the review agent; set in user-config.json per developer"
+        },
+        "auto_publish_pending": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When false (default), the colleague-review publish step requires explicit user approval before submitting the pending review. When true, the pending review is submitted automatically after all findings are drafted. Mirrors implement.require_promote_approval and merge.require_approval."
+        }
+      }
+    },
+    "finalize": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "Finalize workflow settings",
+      "properties": {
+        "optimize_history": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, the finalize workflow rewrites commit history via interactive rebase before merging"
+        },
+        "requirement_disposition": {
+          "type": "string",
+          "enum": [
+            "keep",
+            "delete"
+          ],
+          "scope": "project",
+          "description": "Controls how finalize handles the canonical requirement file at requirements/<category>/<TAG>.md: 'delete' (default) removes it via git rm; 'keep' leaves it in place. No schema-level default is declared here — resolve_disposition() in scripts/finalize-requirement.py is the single authoritative source of the 'delete' fallback, applied whenever this key is absent from the merged config (config.json and user-config.json), the configuration cannot be loaded, or the configured value is not 'keep'/'delete' (a warning is emitted to stderr in the latter two cases). Read from the merged config — no per-spec frontmatter override."
+        },
+        "trigger_merge": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, the finalize workflow calls gh pr merge to trigger the merge. Set false for merge-queue or portal-merge projects."
+        },
+        "poll_version_tag": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, the finalize workflow polls for a version tag after PR merge using the merge commit SHA."
+        },
+        "poll_version_tag_timeout": {
+          "type": "integer",
+          "default": 120,
+          "scope": "project",
+          "description": "How long (in seconds) the finalize workflow polls for a version tag before giving up."
+        },
+        "keep_local_mainline": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "Governs how finalize cleanup handles a local base branch that carries commits not yet on its remote counterpart. When false (default), finalize never holds a local mainline tracking branch: cleanup halts with a precise divergence message (naming the divergent commits and manual rebase/push/reset instructions) and performs no implicit merge, preserving the detached-HEAD mainline posture. When true, the project has opted into maintaining a synced local mainline: cleanup autonomously runs git rebase onto the remote base before proceeding, and still aborts with the same precise divergence message if the rebase conflicts. Regardless of this flag, the base-branch refresh uses git merge --ff-only (never git pull) so a non-fast-forward state surfaces as a controlled error rather than an unintended merge commit."
+        }
+      }
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "description": "Unified branch-merge policy owned by the `specalized merge` command. Every merge site (finalize, requirements, vibe.git.pr, and the `specalized integration integrate` promote-up) resolves channel, strategy, and the approval/admin gate through this single namespace. Merges *into* a branch (feature-branch finalize, rework-back) use merge.strategy; merges *from* an integration branch into its base (the promote-up performed by `specalized integration integrate`, for both the persistent development branch and ephemeral milestone branches) use the directional merge.integration_strategy.",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "squash",
+            "rebase",
+            "merge"
+          ],
+          "default": "squash",
+          "scope": "project",
+          "description": "Merge strategy applied by `specalized merge` when merging *into* a branch (inbound: feature-branch finalize and rework-back). 'squash' (default) collapses the source branch into one commit; 'rebase' replays commits; 'merge' creates a merge commit. Validated against the repository's allowed merge methods at merge time — a strategy the repo disallows (e.g. 'merge' on a no-merge-commit repo) fails fast with a clear message instead of a rejected push. No caller passes a strategy; it is read only from here. The directionally-distinct merge.integration_strategy governs the promote-up direction."
+        },
+        "integration_strategy": {
+          "type": "string",
+          "enum": [
+            "squash",
+            "rebase",
+            "merge"
+          ],
+          "default": "merge",
+          "scope": "project",
+          "description": "Merge strategy applied by `specalized merge` when merging *from* an integration branch into its base — the promote-up performed by `specalized integration integrate`, applied to BOTH the persistent development_branch->mainline_branch promotion and ephemeral milestone-branch integration (one key, not split per class). Directionally distinct from merge.strategy, which governs merges *into* a branch. The default 'merge' preserves per-unit commit SHAs (one squashed commit per requirement) so the automaton batch journal stays valid and the integration branch remains an ancestor of its base for a clean fast-forward reconcile; 'rebase' likewise preserves ancestry; 'squash' collapses the whole batch to one commit and forces a reset --hard reconcile of the integration branch. Validated against the repository's allowed merge methods at merge time. No caller passes a strategy; it is read only from here."
+        },
+        "require_approval": {
+          "type": "boolean",
+          "default": true,
+          "scope": "user",
+          "description": "When true (default), `specalized merge` halts before merging and emits a REQUIRE-APPROVAL marker so the workflow can surface the proposal for explicit human confirmation. This single gate unifies finalize's prior 'PR must be reviewer-APPROVED' halt and integrate's prior 'pause for human confirmation before an automated merge' pause — a deliberate simplification onto one boolean. When false, the merge proceeds without an approval gate. Set in user-config.json only to avoid propagating the gate policy to the team."
+        },
+        "admin": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When true, `specalized merge` appends --admin to gh pr merge on the PR channel, using repo-admin privileges to override branch protection at merge time. When false (default), the merge respects branch protection and aborts if it blocks. Set in user-config.json only to avoid propagating admin merge to the team."
+        }
+      }
+    },
+    "integrate": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Release-train promotion settings for `specalized integration integrate` on the persistent development branch (development -> mainline promotion).",
+      "properties": {
+        "test_command": {
+          "type": "string",
+          "default": "bash scripts/test.sh",
+          "scope": "project",
+          "description": "Shell command that runs the project's full test suite (unit, integration, build verification). It is executed against the development branch as the pre-promotion gate: the promotion is blocked unless this command exits 0. The e2e tests that invoke real LLMs are excluded by construction — they self-skip unless SPECALIZED_RUN_AI_TESTS=1, and the gate scrubs that variable from the command's environment so the run stays fast and deterministic."
+        }
+      }
+    },
+    "slack": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Generic Slack integration settings shared across workflows (finalize delivery notification, automaton, integrate)",
+      "properties": {
+        "channel_id": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Slack channel or DM ID to post delivery and lifecycle notifications to; leave empty to disable. Replaces the former finalize.slack_channel_id key."
+        },
+        "integration_notification": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true (and slack.channel_id is non-empty), a successful release-train promotion of the persistent development branch (development merged into mainline and the batch version tag cut) posts exactly one Slack message to slack.channel_id identifying the promotion: source branch, target branch, and the version tag cut for the batch (matching finalize's delivery-message versioning where a tag is available). When false (default) or when slack.channel_id is empty, no post is attempted and the promotion behaves exactly as before — the notification is purely additive. A Slack or MCP failure is surfaced to the user but never fails or rolls back the completed promotion. The post fires from the `specalized integration integrate` promotion of the persistent development branch."
+        }
+      }
+    },
+    "automaton": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Unattended backlog-drain harness settings (specalized automaton drain). The harness loops specalized.orchestrator one requirement at a time onto the resolved base branch. Runtime controls (--dry-run, the kill-switch sentinel file) are intentionally not config.",
+      "properties": {
+        "max_requirements": {
+          "type": "integer",
+          "default": 20,
+          "scope": "project",
+          "description": "Maximum number of requirements one drain run delivers before stopping with termination cause 'max_requirements'. Set to 0 (or null) for an unbounded run that drains the entire workable backlog."
+        },
+        "max_consecutive_failures": {
+          "type": "integer",
+          "default": 3,
+          "scope": "project",
+          "description": "Circuit breaker: stop the entire drain run once this many dispatched requirements fail in a row (a systemic problem such as a broken base or failing tests). A success resets the counter to 0. Set to 0 to disable the breaker."
+        },
+        "item_timeout_seconds": {
+          "type": "integer",
+          "default": 14400,
+          "scope": "project",
+          "description": "Runtime safety control: per-item wall-clock budget (seconds) for one headless orchestrator session. A session that overruns is terminated and the item is quarantined (a deterministic failure that increments the consecutive-failure counter) so the run continues rather than wedging on a hung session. Default 14400 (4 hours). Set to 0 to disable the timeout."
+        },
+        "max_turns": {
+          "type": "integer",
+          "default": 300,
+          "scope": "project",
+          "description": "Runtime safety control: value passed as --max-turns to each `claude -p` orchestrator session, a coarse runaway backstop bounding the agent's turn count within a single item. Default 300. Set to 0 to omit the flag (no turn cap)."
+        }
+      }
+    },
+    "jira": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "JIRA integration settings",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "Canonical on/off gate for JIRA integration. When false (the default), JIRA-only workflows are excluded from the deployment at compile time (via the whole-workflow only-if predicate) and JIRA-touching workflows degrade gracefully at runtime (skip escalation, shadow tickets, and transitions) instead of halting. When absent, the build infers this value from existing config: true when jira.cloud_id or jira.default_space is non-empty, else false — so already-JIRA-configured projects keep working with no manual migration."
+        },
+        "ticket_prefix": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Prefix used when creating JIRA tickets (e.g. 'MyProject')"
+        },
+        "cloud_id": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Atlassian Cloud tenant UUID (canonical form, e.g. '1cca41ed-de92-4455-812e-a4a463fc61a9'). Retrieve via mcp__atlassian__getAccessibleAtlassianResources — use the 'id' field of the resource whose 'url' matches your tenant. The hostname is accepted by the MCP as a best-effort shortcut but the UUID is stable and preferred."
+        },
+        "host": {
+          "type": "string",
+          "default": "tomtom.atlassian.net",
+          "scope": "project",
+          "description": "Human-visible Atlassian hostname used to construct JIRA browse URLs (e.g. 'tomtom.atlassian.net'). Separate from jira.cloud_id which holds the API tenant UUID. Defaults to 'tomtom.atlassian.net'."
+        },
+        "default_space": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Default JIRA project key for new tickets"
+        },
+        "default_parent_ticket": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Default JIRA epic or parent ticket that new tasks are linked to"
+        },
+        "shadow_tickets": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, requirement files backed by internal IDs receive a shadow JIRA ticket"
+        },
+        "transitions": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "scope": "project",
+          "description": "JIRA workflow transition IDs mapped to Specalized workflow phases",
+          "properties": {
+            "breakdown": {
+              "type": "string",
+              "default": "",
+              "scope": "project",
+              "description": "Transition ID to move a ticket to the breakdown/in-progress state"
+            },
+            "review": {
+              "type": "string",
+              "default": "",
+              "scope": "project",
+              "description": "Transition ID to move a ticket to the review state"
+            },
+            "finalize": {
+              "type": "string",
+              "default": "",
+              "scope": "project",
+              "description": "Transition ID to move a ticket to the done/closed state"
+            }
+          }
+        },
+        "customer": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "Customer name for JIRA tickets created by specalized workflows (e.g. 'Sanago'). Must match an exact option value in your JIRA project's customer multi-select field. Set BOTH this key and jira.customer_field_id together — setting only one yields a malformed payload that JIRA will reject at ticket creation."
+        },
+        "customer_field_id": {
+          "type": "string",
+          "default": "",
+          "scope": "project",
+          "description": "JIRA custom-field ID for the customer multi-select field (e.g. 'customfield_10250' for the NAIS project). Set BOTH this key and jira.customer together — setting only one yields a malformed payload that JIRA will reject at ticket creation."
+        },
+        "priority_scheme": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "project",
+          "description": "Valid priority values for this JIRA project; populated by specalized.trd sync JIRA priorities"
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Pull request workflow settings",
+      "properties": {
+        "title_format": {
+          "type": "string",
+          "enum": [
+            "conventional_commit",
+            "tag"
+          ],
+          "default": "tag",
+          "scope": "project",
+          "description": "Controls PR title format: 'tag' uses [TAG] branch-name heuristic (default); 'conventional_commit' derives type(scope): description from branch commits"
+        }
+      }
+    },
+    "implement": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "user",
+      "description": "Implementation workflow settings",
+      "properties": {
+        "require_promote_approval": {
+          "type": "boolean",
+          "default": true,
+          "scope": "user",
+          "description": "When true (default), the workflow prompts for explicit approval before every gh pr ready call, allowing the user to override the guard interactively. When false, the PR promote guard auto-reverts to draft on open threads and auto-promotes when no open threads exist."
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "user",
+      "description": "Feedback pipeline workflow settings",
+      "properties": {
+        "feedback_channel": {
+          "type": "string",
+          "enum": ["jira", "specalized-workspace"],
+          "enum_advisory": true,
+          "default": "jira",
+          "scope": "user",
+          "companion": {
+            "when": "specalized-workspace",
+            "key": "feedback.specalized_workspace_path",
+            "note": "set this to the on-disk path of the target specalized workspace; while it is unset, 'specalized-workspace' falls back to 'jira'"
+          },
+          "description": "Destination for escalated feedback. The enum lists the recognized values; it is advisory, so config validation accepts any string and the workflow treats any value other than 'specalized-workspace' (including absent or unrecognized values) as the 'jira' path, never dropping feedback. 'jira' (the default) creates a JIRA ticket via the existing escalation flow, unchanged. 'specalized-workspace' creates a new local requirement via specalized.requirements in the workspace named by 'specalized_workspace_path'; this supersedes the same-repo detection introduced by REQ-FEATURES-055. When 'specalized_workspace_path' is unset or points to a location without a detectable requirements workspace, escalation falls back to 'jira' with an inline notice."
+        },
+        "specalized_workspace_path": {
+          "type": "string",
+          "default": "",
+          "scope": "user",
+          "description": "Filesystem path to the target specalized workspace on disk where 'specalized-workspace' feedback is filed as a requirement. User-scoped because it points at the maintainer's own specalized source checkout and travels with their device. Default is unset (empty string): an unset path means no cross-repo routing, so 'specalized-workspace' escalation falls back to 'jira'. When set, the workspace-detection helper validates this path (a 'requirements/' directory containing 'trd.md' at the configured path) regardless of which project the feedback workflow runs in, decoupling the destination from the invocation location. This supersedes the same-repo detection introduced by REQ-FEATURES-055, which validated the current working repo."
+        },
+        "auto_escalate": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When false (default), the feedback pipeline halts at the Phase 4 approval gate and creates a JIRA ticket only after explicit user approval. When true, the pipeline escalates automatically without the approval prompt, using the assembled title, classification, and structured fields. Auto-escalation still applies the source label, resolves the issue type, and (for bugs) validates against deployed documentation — it skips only the human approval prompt. Set in user-config.json only so the bypass travels with a trusted device rather than propagating to a deployment. Mirrors implement.require_promote_approval and merge.require_approval."
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "user",
+      "description": "Personal git workflow settings",
+      "properties": {
+        "remote_provider": {
+          "type": "string",
+          "enum": [
+            "github",
+            "none"
+          ],
+          "default": "github",
+          "scope": "project",
+          "description": "Selects where and how a requirement is delivered. 'github' (default) uses a GitHub remote and pull requests: breakdown pushes the branch and opens a draft PR, implement pushes after each task and promotes the PR, and finalize force-pushes and merges via `gh pr merge` — the existing behavior byte-for-byte. 'none' runs the project fully locally with no GitHub remote required: breakdown creates the branch/worktree and spec without pushing or opening a PR (passing --skip-push --skip-pr to provision-worktree), implement commits locally without pushing, and finalize merges the feature branch into the mainline branch locally (git merge per merge.strategy, via the `merge-local` finalize subcommand) instead of gh pr merge, with no PR required. The name is a delivery-provider enum so additional providers can be added as new values without a rename; 'gitlab' is a planned value and is not yet implemented (not a valid value yet)."
+        },
+        "auto_push_after_commit": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When true, vibe.git.commit force-pushes to the remote tracking branch immediately after each commit"
+        },
+        "push_when_pr_not_draft": {
+          "type": "boolean",
+          "default": false,
+          "scope": "user",
+          "description": "When false, auto-push and finalize push are suppressed if the branch PR is in non-draft review state"
+        }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Claude Code hook integration settings",
+      "properties": {
+        "protect_mainline_edits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true (default), specalized deploy registers a PreToolUse hook in .claude/settings.json that blocks Edit/Write/Bash tool calls when the active worktree is on the configured mainline_branch. When false, no such hook is registered."
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Deploy and upgrade workflow settings",
+      "properties": {
+        "upgrade_strategy": {
+          "type": "string",
+          "enum": ["branch-pr", "in-place", "auto"],
+          "default": "auto",
+          "scope": "project",
+          "description": "How `specalized deploy --pin-version` routes the upgrade commit. 'branch-pr': always land on a dedicated chore/upgrade-<version> branch with a draft PR against mainline (PR-only mainline compatible). 'in-place': commit on the current branch with no branch and no PR. 'auto' (default): use the branch-pr flow only when invoked from the configured mainline_branch, and commit in place on any other branch"
+        }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Bootstrap-time install behaviour for the specalized CLI",
+      "properties": {
+        "bundle_wheel": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, specalized deploy bundles a wheel matching the pinned version under .specalized/bootstrap/ via git-LFS, and the bootstrap script installs from that wheel instead of fetching from the network — enables offline/air-gapped target bootstrap"
+        }
+      }
+    },
+    "trd": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "TRD settings for the deterministic `specalized trd validate` check. TRD split (requirements/trd/<stem>.md section files) is the only produced layout; a legacy monolithic trd.md still reads via an inline-parse fallback but should be converted with `specalized trd update`.",
+      "properties": {
+        "validate": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "scope": "project",
+          "description": "Inputs for the deterministic `specalized trd validate` check",
+          "properties": {
+            "ignored_path_prefixes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "scope": "project",
+              "description": "Repo-root-relative path prefixes exempt from the claim.unresolved-path check, extending the built-in generated-output set (.git/, .github/agents|prompts/, .claude/skills|agents|rules/, .specalized/dist|agents|prompts|cache|wip/, .worktrees/, .temp/, dist/, wip/); use for project-specific deploy/build output locations that never resolve in a source checkout (e.g. 'build/outputs/')"
+            }
+          }
+        }
+      }
+    },
+    "specalized": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Global feature switches for the specalized workflow lifecycle",
+      "properties": {
+        "demo": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "When true (default), implement authors demo.md and finalize enforces the demo gate. Set false to skip all demo-related steps: implement omits Steps 8–9, finalize skips the demo gate unconditionally, and breakdown skips any demo enrichment."
+        }
+      }
+    },
+    "orchestrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Settings for the specalized.orchestrator full-lifecycle delivery workflow",
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "scope": "project",
+          "description": "Maximum number of implement-test-review loop iterations before the orchestrator halts and escalates to the user. Read at runtime by the orchestrator (`specalized config get orchestrator.max_iterations`); when absent from config.json, this schema default of 3 applies."
+        },
+        "require_demo_signoff": {
+          "type": "boolean",
+          "default": true,
+          "scope": "user",
+          "description": "Controls who produces the sign-off at the orchestrator's demo touchpoint (Step 3d). In both modes the orchestrator first runs the demo autonomously via a real execution (per the demo workflow's real-action integrity rules). When true (default), the orchestrator reports the per-step observed results and prompts the user to confirm, override, or fail before recording sign-off (auto-run-then-confirm). When false, a passing autonomous demo records signed-off: true with no prompt, and a failing one records signed-off: false and re-enters the autonomous loop (auto-run-and-self-sign). This governs only WHO signs off, not whether the demo gate exists (specalized.demo) or whether finalize enforces it."
+        },
+        "incremental_review": {
+          "type": "boolean",
+          "default": true,
+          "scope": "project",
+          "description": "Controls whether the orchestrator scopes each loop-iteration review to commits added since the previous review. When true (default), the orchestrator persists last_reviewed_commit in orchestrator-state.json and passes it as the --since baseline on the next iteration's review, so already-passed code is not re-scanned; a review still reads full touched files and the full spec (hybrid scope), and a rewritten-history baseline falls back to a full-branch review. When false, the orchestrator omits the baseline and dispatches a full-branch review every iteration. The --since flag on specalized.review remains available regardless of this key."
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "scope": "project",
+      "description": "Toggleable behavioral features; each key opts the project into optional runtime or deploy-time capabilities",
+      "properties": {
+        "memory_system": {
+          "type": "boolean",
+          "default": false,
+          "scope": "project",
+          "description": "When true, enables the specalized memory system: the main-agent workflow includes memory command processing (remember / always remember / update remember) and deploys memory instruction files from templates. When false (default), both capabilities are suppressed — memory command processing is omitted from the main agent workflow and memory instruction files are not deployed."
+        },
+        "routing_engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "default": {},
+          "scope": "project",
+          "description": "Per-assistant activation engine selector. Selects how workflows are activated; the three engines are mutually exclusive. Replaces the former features.intelligent_routing boolean (hard cutover — no alias).",
+          "properties": {
+            "claude": {
+              "type": "string",
+              "enum": ["native", "specalized", "none"],
+              "default": "native",
+              "scope": "project",
+              "description": "Activation engine for Claude. 'native' (default) deploys workflows as Agent Skills that auto-activate by description (no routing layer); 'specalized' injects the intent-routing registry + main-agent layers; 'none' makes skills explicit-only (no auto-activation, no routing layer)."
+            },
+            "copilot": {
+              "type": "string",
+              "enum": ["specalized", "none"],
+              "default": "specalized",
+              "scope": "project",
+              "description": "Activation engine for Copilot. 'specalized' (default) injects the intent-routing registry + main-agent layers; 'none' omits routing so capabilities are invoked directly. Copilot has no 'native' option (no native auto-activation mechanism)."
+            }
+          }
+        }
+      }
+    },
+    "external_sources": {
+      "type": "array",
+      "default": [],
+      "scope": "project",
+      "description": "External git sources fetched and activated at deploy time. Each entry is cloned at its pinned ref into a gitignored per-prefix cache (.specalized/cache/external/<prefix>/) and read directly by the deploy/fetch pipeline -- never baked into artifacts via build-time ${key} injection (the same direct-consumption path the pinned version uses). Only the external_sources config is committed; the fetched content is never committed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "ref", "kind", "prefix"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Git remote URL of the external source. Fetched with the existing git / gh credential setup (SSH or HTTPS token); no new secret store."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Pinned git ref (tag, branch, or SHA) the cached clone is advanced to. Kept independent of the specalized CLI version-resolution surface."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["workflow", "skill", "command"],
+            "description": "Unit kind imported from this source. 'workflow' compiles and registers imported workflows in the routing table. 'skill' copies source directories verbatim to .claude/skills/<prefix>.<name>/ and never registers them in the routing table. 'command' imports legacy Claude slash-command files verbatim to .claude/commands/<prefix>.<name>.md; it is Claude-only, requires an explicit 'include' naming the files, is never compiled or routed, and its output directory is gitignored."
+          },
+          "assistant": {
+            "type": "string",
+            "enum": ["claude", "copilot", "both"],
+            "default": "both",
+            "description": "Target assistant(s) for the imported units. Fully general for kind:workflow and kind:skill (no per-kind carve-out): 'both' emits both Claude and Copilot artifacts. For kind:command the only accepted value is 'claude' (an absent assistant resolves to 'claude'); any other value is rejected at parse time because legacy .claude/commands/ has no Copilot equivalent."
+          },
+          "prefix": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]+$",
+            "not": {"enum": [".", ".."]},
+            "description": "Namespace applied to every imported id (e.g. 'acme' -> 'acme.security-scan'). Required and unique across sources (duplicate prefixes hard-fail). Constrained to [a-z0-9._-]+ so it is usable verbatim as a filesystem path segment and as the cache directory key. The reserved OS path segments '.' and '..' are explicitly excluded."
+          },
+          "routing_layer": {
+            "type": "string",
+            "enum": ["internal", "utilities", "specalized.ideation", "specalized.execution", "vibe"],
+            "description": "Optional (kind: workflow only). Stamps the routing-group of every imported workflow using a token from .specalized/workflows/routing/priorities.md. When absent, the routing group is derived from the prefix."
+          },
+          "subpath": {
+            "type": "string",
+            "description": "Optional directory within the source repository to import from. Absent means the repository root. Supports monorepos / nested layouts."
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Path to a skill file or directory (kind:skill), a workflow unit name (kind:workflow), or a legacy command file path (kind:command)."
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "description": "Object-form skill boundary (kind:skill only). Copies the directory at 'path' as one skill, promoting the file named by 'entrypoint' to SKILL.md, and deploying under the name given by 'name'.",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Directory path within the source (relative to subpath root) to copy verbatim as one skill unit."
+                    },
+                    "entrypoint": {
+                      "type": "string",
+                      "description": "Filename within 'path' to rename to SKILL.md. Required when the source directory does not already contain a conformant SKILL.md."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Deployed skill name. The skill is placed at .claude/skills/<prefix>.<name>/. Defaults to the last component of 'path' when absent."
+                    }
+                  }
+                }
+              ]
+            },
+            "description": "Unit selector. For kind:workflow, absent imports all discovered units; present narrows to named units (strings only). For kind:skill, absent treats the entire source as one implicit skill (safe default); present names each skill boundary as a file path, directory path (strings), or object form {path, entrypoint, name} for custom entrypoint resolution. For kind:command, include is required and must be a non-empty array of string file paths explicitly naming the legacy command files to import (no scan convention is assumed)."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "command"
+                }
+              },
+              "required": ["kind"]
+            },
+            "then": {
+              "properties": {
+                "assistant": {
+                  "const": "claude"
+                },
+                "include": {
+                  "type": "array",
+                  "minItems": 1
+                }
+              },
+              "required": ["include"]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
